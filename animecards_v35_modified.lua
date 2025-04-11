@@ -28,6 +28,7 @@
 
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
+local input = require 'mp.input'
 
 ------------- User Config -------------
 -- Set these to match your field names in Anki
@@ -52,6 +53,12 @@ local USE_MPV_VOLUME = false
 local ENABLE_SUBS_TO_CLIP = false
 -- Set to true to always open the browser after a card update
 local ALWAYS_OPEN_BROWSER = false
+-- Ask for confirmation before overwriting cards
+-- Recommended to be true unless your MPV version is <0.39
+local ASK_TO_OVERWRITE = true
+-- Limits the number of cards that can be overwritten at once
+-- Set to -1 to disable the limit (Not recommended)
+local OVERWRITE_LIMIT = 8
 
 ---------------------------------------
 
@@ -346,12 +353,32 @@ local function create_screenshot(s, e)
 end
 
 
+local function update_fields(noteid, ifield, afield, tfield)
+  local new_fields = {
+    [IMAGE_FIELD] = ifield,
+    [SENTENCE_AUDIO_FIELD] = afield,
+    [SENTENCE_FIELD] = tfield
+  }
+
+  anki_connect('updateNoteFields', {
+    note={
+      id=noteid,
+      fields=new_fields
+    }
+  })
+end
+
+function get_word(noteid)
+  local note = anki_connect('notesInfo', {notes={noteid}})
+  local word = note["result"][1]["fields"][FRONT_FIELD]["value"]
+  return word
+end
+
 
 local function add_to_last_added(ifield, afield, tfield)
   local added_notes = anki_connect('findNotes', {query='added:1'})["result"]
   table.sort(added_notes)
   local noteid = added_notes[#added_notes]
-  local note = anki_connect('notesInfo', {notes={noteid}})
   local selected_notes = anki_connect("guiSelectedNotes")["result"]
   local is_note_focused
 
@@ -362,31 +389,85 @@ local function add_to_last_added(ifield, afield, tfield)
     anki_connect("guiBrowse", {query='nid:1'})
   end
 
-  if note ~= nil then
-    local word = note["result"][1]["fields"][FRONT_FIELD]["value"]
-    local new_fields = {
-      [SENTENCE_AUDIO_FIELD]=afield,
-      [SENTENCE_FIELD]=tfield,
-      [IMAGE_FIELD]=ifield
-    }
-
-    anki_connect('updateNoteFields', {
-      note={
-        id=noteid,
-        fields=new_fields
-      }
-    })
-
-    if ALWAYS_OPEN_BROWSER or is_note_focused then
-      anki_connect("guiBrowse", {query='nid:' .. noteid})
-    end
-
-    mp.osd_message("Updated note: " .. word, 3)
-    msg.info("Updated note: " .. word)
+  if noteid == nil then
+    mp.osd_message("ERR! Last added card not found.", 3)
+    return
   end
+
+  local word = get_word(noteid)
+
+  update_fields(noteid, ifield, afield, tfield)
+  
+  if ALWAYS_OPEN_BROWSER or is_note_focused then
+    anki_connect("guiBrowse", {query='nid:' .. noteid})
+  end
+
+  mp.osd_message("Updated note: " .. word, 3)
+  msg.info("Updated note: " .. word)
 end
 
-local function get_extract()
+local function overwrite_cards(selected_notes, ifield, afield, tfield)
+  local browser_query = "nid:"
+  
+  -- Use an impossible nid in the browser query to unfocus the card
+  -- Otherwise, it will cause the known issue where the card doesn't get updated
+  anki_connect("guiBrowse", {query='nid:1'})
+
+  for index, noteid in ipairs(selected_notes) do
+    local word = get_word(noteid)
+    update_fields(noteid, ifield, afield, tfield)
+
+    browser_query = browser_query .. noteid
+    if index < #selected_notes then
+      browser_query = browser_query .. ','
+    end
+
+    dlog(word .. " card was overwritten.")
+  end
+
+  anki_connect("guiBrowse", {query=browser_query})
+  
+  mp.osd_message(#selected_notes .. " cards were overwritten.", 3)
+  msg.info(#selected_notes .. " cards were overwritten.")
+end
+
+local function prompt_overwrite(ifield, afield, tfield)
+  local selected_notes = anki_connect("guiSelectedNotes")["result"]
+
+  if #selected_notes == 0 then
+    mp.osd_message("ERR! Nothing selected for overwrite.", 3)
+    return
+  elseif #selected_notes > OVERWRITE_LIMIT and OVERWRITE_LIMIT ~= -1 then
+    mp.osd_message("ERR! The number of selected notes exceeds the overwrite limit (" .. OVERWRITE_LIMIT .. ")", 3)
+    return
+  end
+
+  if ASK_TO_OVERWRITE ~= true then
+    overwrite_cards(selected_notes, ifield, afield, tfield)
+    return
+  end
+
+  if input.select == nil then
+    mp.osd_message("Error: input.select not found. Cannot ask for overwrite confirmation.\nYour MPV version may be below 0.39?", 10)
+    msg.error("Error: input.select not found. Cannot ask for overwrite confirmation.")
+    return
+  end
+
+  input.select({
+    prompt = "Do you want to overwrite " .. #selected_notes .. " cards? ",
+    items = {
+      "No",
+      "Yes",
+    },
+    submit = function (answer_id)
+      if answer_id == 2 then
+        overwrite_cards(selected_notes, ifield, afield, tfield)
+      end
+    end,
+  })
+end
+
+local function get_extract(is_overwrite)
   local lines = get_clipboard()
   local e = 0
   local s = 0
@@ -414,7 +495,14 @@ local function get_extract()
     local ifield = '<img src='.. get_name(s,e) ..'.' .. IMAGE_FORMAT .. '>'
     local afield = "[sound:".. get_name(s,e) .. ".mp3]"
     local tfield = string.gsub(string.gsub(lines,"\n+", "<br />"), "\r", "")
-    add_to_last_added(ifield, afield, tfield)
+    
+    if is_overwrite ~= true then
+      add_to_last_added(ifield, afield, tfield)
+    else
+      prompt_overwrite(ifield, afield, tfield)
+    end
+
+    
     if AUTOPLAY_AUDIO then
       local name = get_name(s, e)
       local audio = utils.join_path(prefix, name .. '.mp3')
@@ -424,16 +512,15 @@ local function get_extract()
   end
 end
 
-local function ex()
-
+local function ex(is_overwrite)
   if not prefix or prefix == "" then
     set_media_dir()
   end
 
   if debug_mode then
-    get_extract()
+    get_extract(is_overwrite)
   else
-    pcall(get_extract)
+    pcall(get_extract, is_overwrite)
   end
 end
 
@@ -463,6 +550,9 @@ mp.observe_property("sub-text", 'string', rec)
 mp.observe_property("filename", "string", clear_subs)
 
 mp.add_key_binding("ctrl+v", "update-anki-card", ex)
+-- I can't pass a function with arguments directly to add_key_binding
+-- therefore an anonymous wrapper is used
+mp.add_key_binding("ctrl+r", "overwrite-anki-cards", function() ex(true) end)
 mp.add_key_binding("ctrl+t", "toggle-clipboard-insertion", toggle_sub_to_clipboard)
 mp.add_key_binding("ctrl+d", "toggle-debug-mode", toggle_debug_mode)
 mp.add_key_binding("ctrl+V", ex)
