@@ -59,6 +59,8 @@ local ASK_TO_OVERWRITE = true
 -- Limits the number of cards that can be overwritten at once
 -- Set to -1 to disable the limit (Not recommended)
 local OVERWRITE_LIMIT = 8
+-- Set to true if you want to keep the <b> tag added by yomitan
+local HIGHLIGHT_WORD = false
 -- Set to true if you want to save misc information
 local WRITE_MISCINFO = false
 -- Field where the misc information will be written
@@ -422,11 +424,52 @@ local function create_miscinfo_text(start_time)
   return text
 end
 
+local function get_field_value(noteid, field)
+  local note = anki_connect('notesInfo', { notes = { noteid } })
+  return note["result"][1]["fields"][field]["value"]
+end
+
+local function save_word_highlight(mpv_sentence, noteid)
+  if HIGHLIGHT_WORD ~= true then
+    return mpv_sentence
+  end
+
+  local anki_sentence = get_field_value(noteid, SENTENCE_FIELD)
+  
+  if anki_sentence == nil or anki_sentence == '' then
+    return mpv_sentence
+  elseif mpv_sentence == nil or mpv_sentence == '' then
+    return anki_sentence
+  end
+
+  -- Looking for content of tag <b> 
+  local highlighted_text = anki_sentence:match("^.-<b>(.-)</b>.-$")
+
+  if not highlighted_text or highlighted_text == '' then
+    return mpv_sentence
+  end
+
+  dlog("Found highlighted text: " .. tostring(highlighted_text))
+  
+  local pattern = string.format("^(.-)%s(.-)$", highlighted_text)
+  local prefix, suffix = mpv_sentence:match(pattern)
+  
+  if prefix and suffix then
+    local new_sentence = string.format("%s<b>%s</b>%s",
+      prefix, highlighted_text, suffix)
+
+    dlog("New sentence with highlight: " .. new_sentence)
+    return new_sentence
+  else
+    return mpv_sentence
+  end
+end
+
 local function update_fields(noteid, fields)
   local new_fields = {
     [IMAGE_FIELD] = fields.image,
     [SENTENCE_AUDIO_FIELD] = fields.audio,
-    [SENTENCE_FIELD] = fields.sentence
+    [SENTENCE_FIELD] = save_word_highlight(fields.sentence, noteid)
   }
 
   if WRITE_MISCINFO == true and fields.miscinfo then
@@ -440,13 +483,6 @@ local function update_fields(noteid, fields)
     }
   })
 end
-
-local function get_word(noteid)
-  local note = anki_connect('notesInfo', { notes = { noteid } })
-  local word = note["result"][1]["fields"][FRONT_FIELD]["value"]
-  return word
-end
-
 
 local function add_to_last_added(fields)
   local added_notes = anki_connect('findNotes', { query = 'added:1' })["result"]
@@ -467,7 +503,7 @@ local function add_to_last_added(fields)
     return
   end
 
-  local word = get_word(noteid)
+  local word = get_field_value(noteid, FRONT_FIELD)
 
   update_fields(noteid, fields)
 
@@ -487,7 +523,7 @@ local function overwrite_cards(selected_notes, fields)
   anki_connect("guiBrowse", { query = 'nid:1' })
 
   for index, noteid in ipairs(selected_notes) do
-    local word = get_word(noteid)
+    local word = get_field_value(noteid, FRONT_FIELD)
     update_fields(noteid, fields)
 
     browser_query = browser_query .. noteid
