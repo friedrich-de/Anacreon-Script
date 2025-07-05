@@ -52,6 +52,13 @@ local function process_cards(note_ids)
 
   -- Defines subs range from clipboard content
   local lines = clip.read()
+
+  if lines == nil then
+    mp.osd_message('Failed to access clipboard', 5)
+    msg.error('Failed to access clipboard: the value is nil.')
+    return
+  end
+
   local range_start, range_end = sub_obs.specify_range(lines)
 
   if range_start == nil and range_end == nil then

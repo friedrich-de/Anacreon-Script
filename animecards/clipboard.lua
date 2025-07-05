@@ -1,5 +1,6 @@
 local utils = require 'mp.utils'
 
+local opts = require 'script_options'
 local tools = require 'tools'
 
 local clipboard = {}
@@ -27,6 +28,11 @@ function clipboard.detect_platform()
 end
 
 function clipboard.read()
+  if opts.USE_MPV_CLIPBOARD_API == true then
+    local api_response = mp.get_property_native('clipboard/text')
+    return api_response
+  end
+
   local res
 
   if platform == 'windows' then
@@ -78,6 +84,11 @@ function clipboard.set(text)
   -- This way pressing control+v without copying from texthooker page
   -- will always give last line.
   text = string.gsub(text, "[\n\r]+", " ")
+
+  if opts.USE_MPV_CLIPBOARD_API == true then
+    mp.set_property("clipboard/text", text)
+    return
+  end
 
   if platform == 'windows' then
     -- Windows clipboard handling with automatic type detection

@@ -8,7 +8,8 @@ local media_dir = ""
 
 function anki.request(action, params)
   local request = utils.format_json({ action = action, params = params, version = 6 })
-  local args = { 'curl', '-s', 'localhost:8765', '-X', 'POST', '-d', request }
+  -- Avoid "localhost" on Windows, it causes latency. Use 127.0.0.1 instead
+  local args = { 'curl', '-s', '127.0.0.1:8765', '-X', 'POST', '-d', request }
 
   tools.dlog("AnkiConnect request: " .. request)
 

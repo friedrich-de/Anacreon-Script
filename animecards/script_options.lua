@@ -14,6 +14,7 @@ opts.ENABLE_SUBS_TO_CLIP = false
 opts.ASK_TO_OVERWRITE = true
 opts.OVERWRITE_LIMIT = 8 -- negative 1 turns off the Limit
 opts.HIGHLIGHT_WORD = false
+opts.USE_MPV_CLIPBOARD_API = false
 
 -- Audio settings
 opts.AUDIO_CLIP_FADE = 0.2     -- seconds
